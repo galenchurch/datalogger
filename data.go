@@ -23,7 +23,7 @@ func spitest() {
 	}
 
 	// Use spireg SPI port registry to find the first available SPI bus.
-	p, err := spireg.Open("")
+	p, err := spireg.Open("/dev/spidev1.0")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -42,5 +42,5 @@ func spitest() {
 		log.Fatal(err)
 	}
 	// Use read.
-	fmt.Printf("data: %v\n", read[1:])
+	fmt.Printf("%v\n", read)
 }
