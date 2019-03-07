@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
+	"time"
 
 	"periph.io/x/periph/conn/physic"
 	"periph.io/x/periph/conn/spi"
@@ -35,6 +37,27 @@ func (d dLog) moving(a float64) float64 {
 	return d.ma.Avg()
 }
 
+func openFile(n string) *os.File {
+
+	f, err := os.OpenFile(n, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+
+	if err != nil {
+		panic(err)
+	}
+
+	if _, err = f.WriteString("val,val2,val3\n"); err != nil {
+		panic(err)
+	}
+
+	return f
+}
+func writeLine(f *os.File, n int, m float64, a float64) {
+	s := fmt.Sprintf("%v,%v,%v\n", n, m, a)
+	if _, err := f.WriteString(s); err != nil {
+		panic(err)
+	}
+}
+
 func spitest() {
 	// Make sure periph is initialized.
 	if _, err := host.Init(); err != nil {
@@ -55,6 +78,7 @@ func spitest() {
 	}
 
 	logger := dLog{ma: movingaverage.New(10)}
+	fp := openFile("test.csv")
 
 	for index := 0; index < 15; index++ {
 		// Write 0x10 to the device, and read a byte right after.
@@ -69,9 +93,13 @@ func spitest() {
 		meas := parseMeasurement(read)
 
 		ave := logger.moving(meas)
+		writeLine(fp, index, meas, ave)
 
 		fmt.Printf("Measurement: %v\n", meas)
 		fmt.Printf("Moving average: %v\n", ave)
+		time.Sleep(100 * time.Millisecond)
 	}
+
+	defer fp.Close()
 
 }
