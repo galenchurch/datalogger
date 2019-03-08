@@ -14,6 +14,41 @@ import (
 	movingaverage "github.com/RobinUS2/golang-moving-average"
 )
 
+type DM struct {
+	tStamp int64
+	meas   float64
+	ave    float64
+	numAve int
+}
+
+func (d *DM) TLI4970Read(c spi.Conn, l dLog) {
+	write := []byte{0x00, 0x00}
+	read := make([]byte, len(write))
+	if err := c.Tx(write, read); err != nil {
+		log.Fatal(err)
+	}
+	t := time.Now()
+	d.tStamp = t.UnixNano()
+	// Use read.
+	fmt.Printf("%v\n", read)
+	d.meas = parseMeasurement(read)
+	d.ave = l.moving(d.meas)
+}
+
+func (d *DM) fmtToLine() (s string) {
+	h, err := os.Hostname()
+	if err != nil {
+		log.Panic("Hostname issue")
+	}
+	s = fmt.Sprintf("current,location=%s i=%v,iave_%v=%v %v", h, d.meas, d.numAve, d.ave, d.tStamp)
+	fmt.Println(s)
+	return s
+}
+
+func (d *DM) postToDb(host string) {
+
+}
+
 func main() {
 	fmt.Printf("test")
 	log.Print("Test")
@@ -26,9 +61,9 @@ type dLog struct {
 
 func parseMeasurement(r []byte) float64 {
 
-	MSB := r[0] & 0x1F
-	MSB = MSB << 8
-	val := MSB + r[1]
+	scratch := r[0] & 0x1F
+	MSB := uint16(scratch) << 8
+	val := MSB + uint16(r[1])
 	return (float64(val) - 4096) / 80
 }
 
@@ -76,28 +111,34 @@ func spitest() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	logger := dLog{ma: movingaverage.New(10)}
+	na := 10
+	logger := dLog{ma: movingaverage.New(na)}
 	fp := openFile("test.csv")
 
-	for index := 0; index < 15; index++ {
-		// Write 0x10 to the device, and read a byte right after.
-		write := []byte{0x00, 0x00}
-		read := make([]byte, len(write))
-		if err := c.Tx(write, read); err != nil {
-			log.Fatal(err)
-		}
-		// Use read.
-		fmt.Printf("%v\n", read)
+	for index := 0; index < 60; index++ {
 
-		meas := parseMeasurement(read)
+		// write := []byte{0x00, 0x00}
+		// read := make([]byte, len(write))
+		// if err := c.Tx(write, read); err != nil {
+		// 	log.Fatal(err)
+		// }
+		// t := time.Now()
+		// // Use read.
+		// fmt.Printf("%v\n", read)
 
-		ave := logger.moving(meas)
-		writeLine(fp, index, meas, ave)
+		// meas := parseMeasurement(read)
 
-		fmt.Printf("Measurement: %v\n", meas)
-		fmt.Printf("Moving average: %v\n", ave)
-		time.Sleep(100 * time.Millisecond)
+		// ave := logger.moving(meas)
+		// writeLine(fp, index, meas, ave)
+
+		// fmt.Printf("Measurement: %v\n", meas)
+		// fmt.Printf("Moving average: %v\n", ave)
+		// fmt.Println("Unix nano:", t.UnixNano())
+		d := DM{numAve: na}
+		d.TLI4970Read(c, logger)
+		d.fmtToLine()
+		time.Sleep(1000 * time.Millisecond)
+
 	}
 
 	defer fp.Close()
