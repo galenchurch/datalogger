@@ -2,37 +2,69 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"log"
+	"net/url"
 	"os"
+	"strconv"
 	"time"
 
+	"gopkg.in/yaml.v2"
 	"periph.io/x/periph/conn/physic"
 	"periph.io/x/periph/conn/spi"
 	"periph.io/x/periph/conn/spi/spireg"
 	"periph.io/x/periph/host"
 
 	movingaverage "github.com/RobinUS2/golang-moving-average"
+	client "github.com/influxdata/influxdb1-client"
 )
 
+type conf struct {
+	Influx_host     string `yaml:"influx_host"`
+	Influx_database string `yaml:"influx_database"`
+	Spi_dev         string `yaml:"spi_dev"`
+}
+
+func (c *conf) getConf() {
+
+	yamlFile, err := ioutil.ReadFile("conf.yaml")
+	if err != nil {
+		log.Printf("yamlFile.Get err   #%v ", err)
+	}
+	err = yaml.Unmarshal(yamlFile, c)
+	if err != nil {
+		log.Fatalf("Unmarshal: %v", err)
+	}
+}
+
 type DM struct {
+	t      time.Time
 	tStamp int64
 	meas   float64
 	ave    float64
 	numAve int
+	loc    string
 }
 
-func (d *DM) TLI4970Read(c spi.Conn, l dLog) {
+func (d *DM) TLI4970Read(l Logger) {
 	write := []byte{0x00, 0x00}
 	read := make([]byte, len(write))
-	if err := c.Tx(write, read); err != nil {
+
+	if err := l.spiCon.Tx(write, read); err != nil {
 		log.Fatal(err)
 	}
-	t := time.Now()
-	d.tStamp = t.UnixNano()
+	fmt.Println("yup")
+	d.t = time.Now()
+	d.tStamp = d.t.UnixNano()
 	// Use read.
 	fmt.Printf("%v\n", read)
 	d.meas = parseMeasurement(read)
 	d.ave = l.moving(d.meas)
+
+	d.loc, _ = os.Hostname()
+	// if err != nil {
+	// 	log.Panic("Hostname issue")
+	// }
 }
 
 func (d *DM) fmtToLine() (s string) {
@@ -49,14 +81,90 @@ func (d *DM) postToDb(host string) {
 
 }
 
+type Logger struct {
+	ma     *movingaverage.MovingAverage
+	inCon  *client.Client
+	spiCon spi.Conn
+}
+
+func (d *Logger) initFromConf() {
+	var cnf conf
+	cnf.getConf()
+
+	fmt.Println(cnf)
+
+	// Make sure periph is initialized.
+	if _, err := host.Init(); err != nil {
+		log.Fatal(err)
+	}
+
+	// Use spireg SPI port registry to find the first available SPI bus.
+	p, err := spireg.Open(cnf.Spi_dev)
+	if err != nil {
+		log.Fatal(err)
+	}
+	//defer p.Close()
+
+	// Convert the spi.Port into a spi.Conn so it can be used for communication.
+	d.spiCon, err = p.Connect(physic.MegaHertz, spi.Mode1, 8)
+	if err != nil {
+		log.Fatal(err)
+	}
+	//na := 10
+	// fp := openFile("test.csv")
+
+	d.connInflux(cnf.Influx_host)
+
+}
+
+func (d *Logger) moving(a float64) float64 {
+	d.ma.Add(a)
+	return d.ma.Avg()
+}
+
+func (d *Logger) connInflux(h string) {
+
+	host, err := url.Parse(fmt.Sprintf("http://%s:%d", h, 8086))
+	if err != nil {
+		log.Fatal(err)
+	}
+	d.inCon, err = client.NewClient(client.Config{URL: *host})
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func (d *Logger) writeToInflux(meas DM) {
+	pts := make([]client.Point, 1)
+	pts[0] = client.Point{
+		Measurement: "current",
+		Tags: map[string]string{
+			"location":  meas.loc,
+			"num_mean:": strconv.Itoa(meas.numAve),
+		},
+		Fields: map[string]interface{}{
+			"i":    meas.meas,
+			"iave": meas.ave,
+		},
+		Time:      meas.t,
+		Precision: "n",
+	}
+
+	bps := client.BatchPoints{
+		Points:   pts,
+		Database: "test",
+	}
+
+	_, err := d.inCon.Write(bps)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
 func main() {
 	fmt.Printf("test")
 	log.Print("Test")
 	spitest()
-}
-
-type dLog struct {
-	ma *movingaverage.MovingAverage
 }
 
 func parseMeasurement(r []byte) float64 {
@@ -65,11 +173,6 @@ func parseMeasurement(r []byte) float64 {
 	MSB := uint16(scratch) << 8
 	val := MSB + uint16(r[1])
 	return (float64(val) - 4096) / 80
-}
-
-func (d dLog) moving(a float64) float64 {
-	d.ma.Add(a)
-	return d.ma.Avg()
 }
 
 func openFile(n string) *os.File {
@@ -94,53 +197,39 @@ func writeLine(f *os.File, n int, m float64, a float64) {
 }
 
 func spitest() {
-	// Make sure periph is initialized.
-	if _, err := host.Init(); err != nil {
-		log.Fatal(err)
-	}
+	// // Make sure periph is initialized.
+	// if _, err := host.Init(); err != nil {
+	// 	log.Fatal(err)
+	// }
 
-	// Use spireg SPI port registry to find the first available SPI bus.
-	p, err := spireg.Open("/dev/spidev1.0")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer p.Close()
+	// // Use spireg SPI port registry to find the first available SPI bus.
+	// p, err := spireg.Open("/dev/spidev1.0")
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+	// defer p.Close()
 
-	// Convert the spi.Port into a spi.Conn so it can be used for communication.
-	c, err := p.Connect(physic.MegaHertz, spi.Mode1, 8)
-	if err != nil {
-		log.Fatal(err)
-	}
+	// // Convert the spi.Port into a spi.Conn so it can be used for communication.
+	// c, err := p.Connect(physic.MegaHertz, spi.Mode1, 8)
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
 	na := 10
-	logger := dLog{ma: movingaverage.New(na)}
-	fp := openFile("test.csv")
+	dl := Logger{ma: movingaverage.New(na)}
+	// fp := openFile("test.csv")
+
+	dl.initFromConf()
 
 	for index := 0; index < 60; index++ {
 
-		// write := []byte{0x00, 0x00}
-		// read := make([]byte, len(write))
-		// if err := c.Tx(write, read); err != nil {
-		// 	log.Fatal(err)
-		// }
-		// t := time.Now()
-		// // Use read.
-		// fmt.Printf("%v\n", read)
-
-		// meas := parseMeasurement(read)
-
-		// ave := logger.moving(meas)
-		// writeLine(fp, index, meas, ave)
-
-		// fmt.Printf("Measurement: %v\n", meas)
-		// fmt.Printf("Moving average: %v\n", ave)
-		// fmt.Println("Unix nano:", t.UnixNano())
 		d := DM{numAve: na}
-		d.TLI4970Read(c, logger)
+		d.TLI4970Read(dl)
 		d.fmtToLine()
+		dl.writeToInflux(d)
 		time.Sleep(1000 * time.Millisecond)
 
 	}
 
-	defer fp.Close()
+	//defer fp.Close()
 
 }
