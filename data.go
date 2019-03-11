@@ -23,6 +23,8 @@ type conf struct {
 	Influx_host     string `yaml:"influx_host"`
 	Influx_database string `yaml:"influx_database"`
 	Spi_dev         string `yaml:"spi_dev"`
+	Mean            int    `yaml:"mean"`
+	Interval        int    `yaml:"interval"`
 }
 
 func (c *conf) getConf() {
@@ -53,11 +55,10 @@ func (d *DM) TLI4970Read(l Logger) {
 	if err := l.spiCon.Tx(write, read); err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("yup")
 	d.t = time.Now()
 	d.tStamp = d.t.UnixNano()
 	// Use read.
-	fmt.Printf("%v\n", read)
+	//fmt.Printf("%v\n", read)
 	d.meas = parseMeasurement(read)
 	d.ave = l.moving(d.meas)
 
@@ -73,7 +74,7 @@ func (d *DM) fmtToLine() (s string) {
 		log.Panic("Hostname issue")
 	}
 	s = fmt.Sprintf("current,location=%s i=%v,iave_%v=%v %v", h, d.meas, d.numAve, d.ave, d.tStamp)
-	fmt.Println(s)
+	//fmt.Println(s)
 	return s
 }
 
@@ -82,9 +83,10 @@ func (d *DM) postToDb(host string) {
 }
 
 type Logger struct {
-	ma     *movingaverage.MovingAverage
-	inCon  *client.Client
-	spiCon spi.Conn
+	ma       *movingaverage.MovingAverage
+	inCon    *client.Client
+	spiCon   spi.Conn
+	interval int
 }
 
 func (d *Logger) initFromConf() {
@@ -92,6 +94,7 @@ func (d *Logger) initFromConf() {
 	cnf.getConf()
 
 	fmt.Println(cnf)
+	d.interval = cnf.Interval
 
 	// Make sure periph is initialized.
 	if _, err := host.Init(); err != nil {
@@ -219,14 +222,14 @@ func spitest() {
 	// fp := openFile("test.csv")
 
 	dl.initFromConf()
-
-	for index := 0; index < 60; index++ {
+	//index := 0; index < 60; index++
+	for {
 
 		d := DM{numAve: na}
 		d.TLI4970Read(dl)
-		d.fmtToLine()
+		//d.fmtToLine()
 		dl.writeToInflux(d)
-		time.Sleep(1000 * time.Millisecond)
+		time.Sleep(time.Duration(dl.interval) * time.Millisecond)
 
 	}
 
