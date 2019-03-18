@@ -1,8 +1,12 @@
 # datalogger
 
+Datalogger for SPI data on Beaglebone Black.  Currently logs measurements from Infineon TLI4970 Digital Hall Current Sensor: https://www.infineon.com/cms/en/product/sensor/magnetic-current-sensor/tli4970-d050t4/ 
+
+Will post directly to InlfuxDB or fall-back to local file formated with inlfux line-protocol.
+
 ### conf.yaml Format
 
-    influx_host: "{localhost | server_ip}"
+    influx_host: "{localhost | server_ip | file}"
     influx_database: "test"
     spi_dev: "/dev/spidev1.0"
     mean: 10
